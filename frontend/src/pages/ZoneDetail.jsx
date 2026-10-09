@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import { fetchZone, fetchRainfall, fetchForecasts, fetchAssessments, assessZone, runAgentExplain } from "../api";
+import { fetchZone, fetchRainfall, fetchForecasts, fetchAssessments, assessZone, runAgentExplain, fetchInterventions } from "../api";
 import RiskBadge from "../components/RiskBadge";
 import SyntheticDataBanner from "../components/SyntheticDataBanner";
 
@@ -60,7 +60,6 @@ export default function ZoneDetail() {
     setError(null);
     try {
       // Call agent via intervention endpoint if available
-      const { fetchInterventions } = await import("../api");
       const invData = await fetchInterventions({ zone: id });
       const invList = invData.results || invData;
       if (invList.length === 0) { setError("No interventions found for this zone. Run an assessment first."); setAgentRunning(false); return; }
