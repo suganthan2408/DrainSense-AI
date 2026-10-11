@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
-import { fetchZone, fetchRainfall, fetchForecasts, fetchAssessments, assessZone, runAgentExplain, fetchInterventions } from "../api";
+import { fetchZone, fetchRainfall, fetchForecasts, fetchAssessments, assessZone, runAgentExplain, fetchInterventions, fetchForecastsLive } from "../api";
 import RiskBadge from "../components/RiskBadge";
 import SyntheticDataBanner from "../components/SyntheticDataBanner";
+import { useLocationScope } from "../LocationContext";
 
 export default function ZoneDetail() {
   const { id } = useParams();
@@ -14,17 +15,19 @@ export default function ZoneDetail() {
   const [loading, setLoading] = useState(true);
   const [assessing, setAssessing] = useState(false);
   const [agentRunning, setAgentRunning] = useState(false);
+  const [refreshingForecasts, setRefreshingForecasts] = useState(false);
   const [error, setError] = useState(null);
+  const { locationParams, scopeLabel } = useLocationScope();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [z, r, f, a] = await Promise.all([
-        fetchZone(id),
-        fetchRainfall(id),
-        fetchForecasts(id),
-        fetchAssessments(id),
+        fetchZone(id, locationParams),
+        fetchRainfall(id, locationParams),
+        fetchForecasts(id, locationParams),
+        fetchAssessments(id, locationParams),
       ]);
       setZone(z);
       setRainfall((r.results || r).slice(0, 5));
@@ -35,7 +38,7 @@ export default function ZoneDetail() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, locationParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,7 +63,7 @@ export default function ZoneDetail() {
     setError(null);
     try {
       // Call agent via intervention endpoint if available
-      const invData = await fetchInterventions({ zone: id });
+      const invData = await fetchInterventions({ ...locationParams, zone: id });
       const invList = invData.results || invData;
       if (invList.length === 0) { setError("No interventions found for this zone. Run an assessment first."); setAgentRunning(false); return; }
       const result = await runAgentExplain(invList[0].id);
@@ -69,6 +72,20 @@ export default function ZoneDetail() {
       setError("Agent failed: " + (e.response?.data?.error || e.message));
     } finally {
       setAgentRunning(false);
+    }
+  };
+
+  const handleRefreshForecasts = async () => {
+    setRefreshingForecasts(true);
+    setError(null);
+    try {
+      await fetchForecastsLive({ ...locationParams, zone: id });
+      const data = await fetchForecasts(id, locationParams);
+      setForecasts((data.results || data).slice(0, 12));
+    } catch (e) {
+      setError("Forecast refresh failed: " + (e.response?.data?.error || e.message));
+    } finally {
+      setRefreshingForecasts(false);
     }
   };
 
@@ -83,7 +100,12 @@ export default function ZoneDetail() {
         <div>
           <Link to="/map" className="text-muted text-sm" style={{ display: "block", marginBottom: 4 }}>← Back to map</Link>
           <h1 className="page-title">{zone.name}</h1>
-          <p className="page-subtitle mono">{zone.code} · {zone.latitude.toFixed(4)}°N, {zone.longitude.toFixed(4)}°E</p>
+          <p className="page-subtitle mono">
+            {zone.code} · {zone.latitude != null && zone.longitude != null
+              ? `${zone.latitude.toFixed(4)}, ${zone.longitude.toFixed(4)}`
+              : "Coordinates unavailable"}
+            {" · "}{zone.district_name || "District not assigned"}{zone.state_name ? `, ${zone.state_name}` : ""}
+          </p>
         </div>
         {latest && <RiskBadge category={latest.risk_category} />}
       </div>
@@ -97,12 +119,12 @@ export default function ZoneDetail() {
           <h2 style={{ marginBottom: "0.75rem" }}>Zone Attributes</h2>
           <table aria-label="Zone physical attributes">
             <tbody>
-              <tr><td className="text-muted text-sm">Elevation (avg)</td><td>{zone.avg_elevation_m ? `${zone.avg_elevation_m} m` : "Unknown"}</td></tr>
-              <tr><td className="text-muted text-sm">Elevation (min)</td><td>{zone.min_elevation_m ? `${zone.min_elevation_m} m` : "Unknown"}</td></tr>
-              <tr><td className="text-muted text-sm">Drain density</td><td>{zone.drainage_density ? `${zone.drainage_density} km/km²` : "Unknown"}</td></tr>
-              <tr><td className="text-muted text-sm">Impervious</td><td>{zone.imperviousness_pct ? `${zone.imperviousness_pct}%` : "Unknown"}</td></tr>
-              <tr><td className="text-muted text-sm">Area</td><td>{zone.area_km2 ? `${zone.area_km2} km²` : "Unknown"}</td></tr>
-              <tr><td className="text-muted text-sm">Pop. density</td><td>{zone.population_density ? `${zone.population_density} /km²` : "Unknown"}</td></tr>
+              <tr><td className="text-muted text-sm">Elevation (avg)</td><td>{zone.avg_elevation_m != null ? `${zone.avg_elevation_m} m` : "Unknown"}</td></tr>
+              <tr><td className="text-muted text-sm">Elevation (min)</td><td>{zone.min_elevation_m != null ? `${zone.min_elevation_m} m` : "Unknown"}</td></tr>
+              <tr><td className="text-muted text-sm">Drain density</td><td>{zone.drainage_density != null ? `${zone.drainage_density} km/km²` : "Unknown"}</td></tr>
+              <tr><td className="text-muted text-sm">Impervious</td><td>{zone.imperviousness_pct != null ? `${zone.imperviousness_pct}%` : "Unknown"}</td></tr>
+              <tr><td className="text-muted text-sm">Area</td><td>{zone.area_km2 != null ? `${zone.area_km2} km²` : "Unknown"}</td></tr>
+              <tr><td className="text-muted text-sm">Pop. density</td><td>{zone.population_density != null ? `${zone.population_density} /km²` : "Unknown"}</td></tr>
               <tr><td className="text-muted text-sm">Flood history</td><td>{zone.historical_flood_count} events recorded</td></tr>
               {zone.last_flood_date && <tr><td className="text-muted text-sm">Last flood</td><td>{zone.last_flood_date}</td></tr>}
               <tr><td className="text-muted text-sm">Data source</td><td className="text-sm">{zone.data_source}</td></tr>
@@ -237,7 +259,12 @@ export default function ZoneDetail() {
 
         {/* Forecasts */}
         <div className="card">
-          <h2 style={{ marginBottom: "0.75rem" }}>Rainfall Forecast (Open-Meteo)</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
+            <h2 style={{ margin: 0 }}>Rainfall Forecast (Open-Meteo)</h2>
+            <button className="btn btn-secondary" onClick={handleRefreshForecasts} disabled={refreshingForecasts} aria-busy={refreshingForecasts}>
+              {refreshingForecasts ? "Refreshing…" : "Refresh live forecast"}
+            </button>
+          </div>
           {forecasts.length === 0 ? (
             <p className="text-muted">No forecast data. Forecasts are fetched live from Open-Meteo.</p>
           ) : (

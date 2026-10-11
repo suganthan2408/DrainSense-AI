@@ -228,24 +228,47 @@ def score_zone(zone) -> "RiskAssessment":
     rainfall_1h = None
     rainfall_24h = None
     if latest_obs:
-        age = datetime.now(timezone.utc) - latest_obs.observed_at.replace(tzinfo=timezone.utc)
+        obs_dt = latest_obs.observed_at if latest_obs.observed_at.tzinfo else latest_obs.observed_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - obs_dt
         if age > timedelta(hours=3):
-            warnings.append(f"Most recent rainfall observation is {age.seconds // 3600}h {(age.seconds % 3600) // 60}m old — may not reflect current conditions.")
-        rainfall_1h = latest_obs.rainfall_1h_mm
-        rainfall_24h = latest_obs.rainfall_24h_mm
+            total_h = int(age.total_seconds() // 3600)
+            total_m = int((age.total_seconds() % 3600) // 60)
+            warnings.append(f"Most recent rainfall observation is {total_h}h {total_m}m old — ignored as stale.")
+        elif latest_obs.quality_flag != "OK":
+            warnings.append(
+                f"Most recent rainfall observation is flagged {latest_obs.quality_flag} — ignored."
+            )
+        else:
+            rainfall_1h = latest_obs.rainfall_1h_mm
+            rainfall_24h = latest_obs.rainfall_24h_mm
     else:
         warnings.append("No rainfall observations available — rainfall component uses default estimate.")
 
-    # Fetch latest forecast
-    latest_forecast = (
+    # Score the next six forecast hours from the most recent forecast run.
+    forecast_now = datetime.now(timezone.utc)
+    forecast_query = (
         RainfallForecast.objects
-        .filter(zone=zone, forecast_for__gte=datetime.now(timezone.utc))
-        .order_by("forecast_horizon_hours")
-        .first()
+        .filter(zone=zone, forecast_for__gt=forecast_now)
     )
-    forecast_6h = latest_forecast.rainfall_mm if latest_forecast else None
-    if not latest_forecast:
+    latest_issue_at = forecast_query.order_by("-issued_at").values_list(
+        "issued_at", flat=True
+    ).first()
+    forecast_6h = None
+    if latest_issue_at is None:
         warnings.append("No rainfall forecast available — forecast component uses default estimate.")
+    elif forecast_now - latest_issue_at > timedelta(hours=6):
+        warnings.append("Most recent rainfall forecast is stale — forecast component uses default estimate.")
+    else:
+        forecast_hours = list(
+            forecast_query.filter(issued_at=latest_issue_at)
+            .order_by("forecast_for")[:6]
+        )
+        if len(forecast_hours) < 6:
+            warnings.append(
+                "Fewer than six forecast hours are available — forecast component uses default estimate."
+            )
+        else:
+            forecast_6h = sum(item.rainfall_mm for item in forecast_hours)
 
     # Compute component scores
     rain_score, rain_desc = _rainfall_intensity_score(rainfall_1h, rainfall_24h)

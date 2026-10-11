@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
-  fetchZones, fetchInterventions, fetchDataSources, fetchAssessments,
+  fetchZones, fetchInterventions, fetchDataSources, fetchGeographicSummary,
 } from "../api";
 import RiskBadge from "../components/RiskBadge";
 import SyntheticDataBanner from "../components/SyntheticDataBanner";
+import { useLocationScope } from "../LocationContext";
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -22,32 +23,36 @@ export default function Dashboard() {
   const [zones, setZones] = useState([]);
   const [interventions, setInterventions] = useState([]);
   const [sources, setSources] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const { locationParams, scopeLabel } = useLocationScope();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [zR, iR, sR] = await Promise.all([
-        fetchZones(),
-        fetchInterventions({ status: "PENDING" }),
+      const [zR, iR, sR, summaryR] = await Promise.all([
+        fetchZones(locationParams),
+        fetchInterventions({ ...locationParams, status: "PENDING" }),
         fetchDataSources(),
+        fetchGeographicSummary(locationParams),
       ]);
       setZones(zR.results || zR);
       setInterventions(iR.results || iR);
       setSources(sR.results || sR);
+      setSummary(summaryR);
     } catch (e) {
       setError("Failed to load dashboard data. Is the backend running?");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [locationParams]);
 
   useEffect(() => { load(); }, [load]);
 
-  const criticalZones = zones.filter((z) => z.latest_risk_category === "CRITICAL");
-  const highZones = zones.filter((z) => z.latest_risk_category === "HIGH");
+  const criticalZones = summary?.risk_category_counts?.CRITICAL || 0;
+  const highZones = summary?.risk_category_counts?.HIGH || 0;
   const topIntervention = interventions[0];
   const liveSources = sources.filter((s) => s.is_live);
 
@@ -60,7 +65,7 @@ export default function Dashboard() {
         <div>
           <h1 className="page-title">🌧 DrainSense AI Dashboard</h1>
           <p className="page-subtitle">
-            Urban waterlogging risk and drainage intervention prioritisation — Coimbatore, Tamil Nadu
+            Geographic scope: {scopeLabel}. Coverage and risk indicators reflect records currently loaded.
           </p>
         </div>
         <button className="btn btn-secondary" onClick={load} aria-label="Refresh dashboard">
@@ -73,28 +78,52 @@ export default function Dashboard() {
       {/* Stats row */}
       <div className="grid-4" style={{ marginBottom: "1.5rem" }}>
         <StatCard
-          label="Total Zones"
-          value={zones.length}
-          sub="Coimbatore drainage zones"
+          label="State / district coverage"
+          value={`${summary?.coverage?.states ?? "—"} / ${summary?.coverage?.districts ?? "—"}`}
+          sub="States / districts in reference data"
+        />
+        <StatCard
+          label="Zones with observations"
+          value={`${summary?.coverage?.zones_with_observations ?? "—"} / ${summary?.coverage?.zones ?? "—"}`}
+          sub={`${summary?.coverage?.zones_with_verified_observations ?? 0} with non-estimated, OK observations`}
         />
         <StatCard
           label="Critical / High"
-          value={`${criticalZones.length} / ${highZones.length}`}
-          sub="Zones requiring immediate attention"
-          color={criticalZones.length > 0 ? "var(--risk-critical)" : "var(--risk-moderate)"}
+          value={`${criticalZones} / ${highZones}`}
+          sub="Assessed zones only; ranking scores, not probabilities"
+          color={criticalZones > 0 ? "var(--risk-critical)" : "var(--risk-moderate)"}
         />
         <StatCard
           label="Pending Interventions"
           value={interventions.length}
-          sub="Awaiting assignment or action"
+          sub={`Pending in ${scopeLabel}`}
           color={interventions.length > 0 ? "var(--risk-high)" : "var(--risk-low)"}
         />
         <StatCard
-          label="Live Data Sources"
+          label="Sources marked live"
           value={liveSources.length}
-          sub={liveSources.map((s) => s.name).join(", ") || "None active"}
+          sub="System-wide source status; not a location-specific sensor count"
         />
       </div>
+      {summary && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <strong>Coverage and freshness — {summary.scope}</strong>
+          <p className="text-sm text-muted" style={{ marginBottom: 0 }}>
+            {summary.coverage.synthetic_zones} synthetic zones; {summary.coverage.zones_with_forecasts} zones have forecast records.
+            Latest observation: {summary.data_freshness.latest_observation_at
+              ? new Date(summary.data_freshness.latest_observation_at).toLocaleString()
+              : "none"}.
+            {" "}Latest forecast issued: {summary.data_freshness.latest_forecast_issued_at
+              ? new Date(summary.data_freshness.latest_forecast_issued_at).toLocaleString()
+              : "none"}.
+          </p>
+          {zones.length === 0 && (
+            <p className="text-sm" style={{ marginBottom: 0 }}>
+              No monitoring zones are loaded for this scope; absence of records is not zero risk.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="grid-2" style={{ gap: "1.5rem" }}>
         {/* Zones table */}

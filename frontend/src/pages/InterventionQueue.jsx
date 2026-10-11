@@ -3,6 +3,7 @@ import {
   fetchInterventions, updateInterventionStatus, runAgentExplain,
 } from "../api";
 import RiskBadge from "../components/RiskBadge";
+import { useLocationScope } from "../LocationContext";
 
 const STATUS_COLORS = {
   PENDING: "badge-moderate",
@@ -28,19 +29,23 @@ export default function InterventionQueue() {
   const [agentRunning, setAgentRunning] = useState(null);
   const [agentResults, setAgentResults] = useState({});
   const [updatingId, setUpdatingId] = useState(null);
+  const { locationParams, scopeLabel } = useLocationScope();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchInterventions(statusFilter ? { status: statusFilter } : {});
+      const data = await fetchInterventions({
+        ...locationParams,
+        ...(statusFilter ? { status: statusFilter } : {}),
+      });
       setItems(data.results || data);
     } catch (e) {
       setError("Failed to load interventions: " + e.message);
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, locationParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -79,7 +84,7 @@ export default function InterventionQueue() {
         <div>
           <h1 className="page-title">Intervention Priority Queue</h1>
           <p className="page-subtitle">
-            Drainage zones ranked by risk, confidence, and urgency
+            {scopeLabel} · Zones ranked by heuristic risk, confidence, and urgency
           </p>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -149,7 +154,10 @@ export default function InterventionQueue() {
                     </div>
                     <div>
                       <div style={{ fontWeight: 700 }}>{item.zone_name}</div>
-                      <div className="text-muted text-sm mono">{item.zone_code}</div>
+                      <div className="text-muted text-sm mono">
+                        {item.zone_code} · {item.district_name || "District not assigned"}{item.state_name ? `, ${item.state_name}` : ""}
+                      </div>
+                      {item.zone_is_synthetic && <div className="text-sm" style={{ color: "var(--risk-moderate)" }}>Synthetic demonstration zone</div>}
                       <div className="text-sm" style={{ marginTop: 2 }}>
                         {item.action_display} · Score: {item.priority_score?.toFixed(1)}
                       </div>
@@ -197,12 +205,16 @@ export default function InterventionQueue() {
                       <div className="card" style={{ background: "var(--color-bg)", marginBottom: "0.75rem" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
                           <h3 style={{ margin: 0 }}>🤖 Agent Explanation</h3>
-                          <span className={`badge ${agentResult.agent_available ? "badge-low" : "badge-moderate"}`}>
-                            {agentResult.agent_available ? "AWS Bedrock" : "Fallback mode"}
+                          <span className={`badge ${agentResult.execution_status === "success" ? "badge-low" : "badge-moderate"}`}>
+                            {agentResult.execution_status === "success"
+                              ? `${agentResult.model_provider || "Model"} execution succeeded`
+                              : "Deterministic fallback"}
                           </span>
                         </div>
                         <p className="text-sm">{agentResult.risk_summary}</p>
                         <div className="text-sm">
+                          <strong>Execution:</strong> {agentResult.execution_status || "not reported"}
+                          {agentResult.model_used && <> · <strong>Model:</strong> {agentResult.model_used}</>}<br />
                           <strong>Recommended:</strong> {agentResult.recommended_action}<br />
                           <strong>Urgency:</strong> {agentResult.urgency} ·{" "}
                           <strong>Human verification:</strong> {agentResult.human_verification_required ? "Required ⚠" : "Not required"}

@@ -7,7 +7,6 @@ Reports limitations honestly.
 """
 
 import logging
-from datetime import timezone
 
 import numpy as np
 
@@ -21,12 +20,14 @@ def compute_and_store_metrics(threshold: float = 50.0):
 
     Returns a ModelEvaluation instance, or None if insufficient data.
     """
-    import django
     from outcomes.models import WaterloggingOutcome, ModelEvaluation
-    from zones.models import RiskAssessment
 
-    verified = WaterloggingOutcome.objects.exclude(
-        outcome=WaterloggingOutcome.OUTCOME_UNKNOWN
+    verified = WaterloggingOutcome.objects.filter(
+        is_synthetic=False,
+    ).exclude(
+        report_source=WaterloggingOutcome.SOURCE_SYNTHETIC,
+    ).exclude(
+        outcome=WaterloggingOutcome.OUTCOME_UNKNOWN,
     ).select_related("risk_assessment")
 
     n = verified.count()
@@ -60,10 +61,14 @@ def compute_and_store_metrics(threshold: float = 50.0):
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else None
     recall = tp / (tp + fn) if (tp + fn) > 0 else None
-    f1 = (2 * precision * recall / (precision + recall)) if (precision and recall and (precision + recall) > 0) else None
+    if precision is None or recall is None:
+        f1 = None
+    elif precision + recall == 0:
+        f1 = 0.0
+    else:
+        f1 = 2 * precision * recall / (precision + recall)
     accuracy = (tp + tn) / len(y_true) if len(y_true) > 0 else None
 
-    from django.utils import timezone as dj_timezone
     start = verified.order_by("observation_window_start").first().observation_window_start
     end = verified.order_by("-observation_window_end").first().observation_window_end
 
@@ -85,7 +90,7 @@ def compute_and_store_metrics(threshold: float = 50.0):
         classification_threshold=threshold,
         limitations_notes=(
             f"Metrics based on {len(y_true)} observations. "
-            f"Labels derived from field reports and synthetic demonstration data. "
+            f"Synthetic demonstration records are excluded from this evaluation. "
             f"The score threshold ({threshold}) was not tuned on a validation set. "
             f"These metrics should be interpreted cautiously given the small sample size "
             f"and the heuristic nature of the risk scorer."

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { fetchOutcomes, fetchEvaluations, computeEvaluation, fetchZones, recordOutcome, fetchAssessments } from "../api";
+import { useLocationScope } from "../LocationContext";
 
 export default function OutcomeTracking() {
   const [outcomes, setOutcomes] = useState([]);
@@ -22,15 +23,16 @@ export default function OutcomeTracking() {
     observation_window_end: "",
   });
   const [zoneAssessments, setZoneAssessments] = useState([]);
+  const { locationParams, scopeLabel } = useLocationScope();
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [o, e, z] = await Promise.all([
-        fetchOutcomes(),
+        fetchOutcomes(null, locationParams),
         fetchEvaluations(),
-        fetchZones(),
+        fetchZones(locationParams),
       ]);
       setOutcomes((o.results || o).slice(0, 20));
       setEvaluations(e.results || e);
@@ -40,17 +42,20 @@ export default function OutcomeTracking() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [locationParams]);
 
   useEffect(() => { load(); }, [load]);
 
   const handleZoneChange = async (zoneId) => {
     setForm((f) => ({ ...f, zone: zoneId, risk_assessment: "" }));
-    if (zoneId) {
-      const data = await fetchAssessments(zoneId);
+    setError(null);
+    setZoneAssessments([]);
+    if (!zoneId) return;
+    try {
+      const data = await fetchAssessments(zoneId, locationParams);
       setZoneAssessments(data.results || data);
-    } else {
-      setZoneAssessments([]);
+    } catch (err) {
+      setError("Failed to load assessments for this zone: " + (err.response?.data?.detail || err.message));
     }
   };
 
@@ -103,13 +108,19 @@ export default function OutcomeTracking() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Prediction & Outcome Tracking</h1>
-          <p className="page-subtitle">Record observed waterlogging outcomes and evaluate prediction accuracy</p>
+          <p className="page-subtitle">Scope: {scopeLabel} · Record verified outcomes for selected locations</p>
         </div>
         <button className="btn btn-secondary" onClick={load}>↻ Refresh</button>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
       {success && <div className="alert alert-success">{success}</div>}
+      {Object.keys(locationParams).length > 0 && (
+        <div className="alert alert-warning">
+          Stored evaluation metrics are currently global and are not segmented by the selected location.
+          Outcomes below are filtered to the selected scope.
+        </div>
+      )}
 
       <div className="grid-2" style={{ gap: "1rem", marginBottom: "1.5rem" }}>
         {/* Record outcome form */}
@@ -283,6 +294,9 @@ export default function OutcomeTracking() {
                 <tr key={o.id}>
                   <td>
                     <span style={{ fontWeight: 600 }}>{o.zone_code}</span>
+                    <div className="text-sm text-muted">
+                      {o.district_name || "District not assigned"}{o.state_name ? `, ${o.state_name}` : ""}
+                    </div>
                   </td>
                   <td>
                     <span className={`badge ${o.outcome === "OCCURRED" ? "badge-high" : o.outcome === "NOT_OCCURRED" ? "badge-low" : "badge-unknown"}`}>

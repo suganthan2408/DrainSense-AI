@@ -20,7 +20,7 @@ OPEN_METEO_BASE = os.environ.get("OPEN_METEO_BASE_URL", "https://api.open-meteo.
 FETCH_TIMEOUT_S = 15
 
 
-def fetch_open_meteo_forecasts() -> int:
+def fetch_open_meteo_forecasts(zones=None) -> int:
     """
     Fetch hourly precipitation forecast for all zones from Open-Meteo.
     Returns count of new forecast records saved.
@@ -34,13 +34,16 @@ def fetch_open_meteo_forecasts() -> int:
             "url": "https://open-meteo.com/",
             "description": "Free, open-source weather forecast API. No API key required.",
             "license_info": "Open-Meteo data is licensed under CC BY 4.0",
-            "is_live": True,
+            "is_live": False,
             "is_synthetic": False,
         },
     )
 
-    zones = Zone.objects.all()
+    zones = Zone.objects.all() if zones is None else zones
+    zones = zones.filter(latitude__isnull=False, longitude__isnull=False)
     total_saved = 0
+    zone_count = zones.count()
+    successful_zone_fetches = 0
     now = datetime.now(timezone.utc)
 
     for zone in zones:
@@ -50,7 +53,7 @@ def fetch_open_meteo_forecasts() -> int:
                 "longitude": zone.longitude,
                 "hourly": "precipitation,precipitation_probability,temperature_2m,relative_humidity_2m,wind_speed_10m",
                 "forecast_days": 2,
-                "timezone": "Asia/Kolkata",
+                "timezone": "UTC",
             }
             resp = requests.get(
                 f"{OPEN_METEO_BASE}/forecast",
@@ -61,6 +64,8 @@ def fetch_open_meteo_forecasts() -> int:
             data = resp.json()
 
             hourly = data.get("hourly", {})
+            if not isinstance(hourly, dict) or not isinstance(hourly.get("time"), list):
+                raise ValueError("Open-Meteo response is missing hourly forecast data.")
             times = hourly.get("time", [])
             precip = hourly.get("precipitation", [])
             precip_prob = hourly.get("precipitation_probability", [])
@@ -94,12 +99,20 @@ def fetch_open_meteo_forecasts() -> int:
                     total_saved += 1
 
             # Update source freshness
+            source.is_live = True
             source.last_fetched_at = now
-            source.save(update_fields=["last_fetched_at"])
+            source.save(update_fields=["is_live", "last_fetched_at"])
+            successful_zone_fetches += 1
 
         except requests.exceptions.RequestException as exc:
             logger.warning("Open-Meteo fetch failed for zone %s: %s", zone.code, exc)
             continue
+        except (TypeError, ValueError) as exc:
+            logger.warning("Invalid Open-Meteo response for zone %s: %s", zone.code, exc)
+            continue
+
+    if zone_count and successful_zone_fetches == 0:
+        raise RuntimeError("Open-Meteo returned no usable forecast data for any zone.")
 
     logger.info("Fetched %d new forecast records from Open-Meteo", total_saved)
     return total_saved

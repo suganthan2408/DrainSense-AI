@@ -7,6 +7,120 @@ Risk assessments are attached to zones.
 
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.utils import timezone
+
+
+class Country(models.Model):
+    """Country reference record; currently India is the supported country."""
+
+    code = models.CharField(max_length=2, unique=True)
+    name = models.CharField(max_length=100, unique=True)
+    source_name = models.CharField(max_length=200, blank=True)
+    source_url = models.URLField(blank=True)
+    is_active = models.BooleanField(default=True)
+    last_updated = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name_plural = "countries"
+
+    def __str__(self):
+        return self.name
+
+
+class State(models.Model):
+    """State or Union Territory reference data."""
+
+    TYPE_STATE = "STATE"
+    TYPE_UT = "UT"
+    TYPE_CHOICES = [(TYPE_STATE, "State"), (TYPE_UT, "Union Territory")]
+
+    country = models.ForeignKey(
+        Country, on_delete=models.PROTECT, related_name="states"
+    )
+    code = models.CharField(
+        max_length=16,
+        unique=True,
+        help_text="Stable subdivision identifier, e.g. IN-TN.",
+    )
+    lgd_code = models.CharField(max_length=20, null=True, blank=True, unique=True)
+    name = models.CharField(max_length=150)
+    administrative_type = models.CharField(
+        max_length=10, choices=TYPE_CHOICES, default=TYPE_STATE
+    )
+    latitude = models.FloatField(
+        null=True, blank=True,
+        validators=[MinValueValidator(-90.0), MaxValueValidator(90.0)],
+    )
+    longitude = models.FloatField(
+        null=True, blank=True,
+        validators=[MinValueValidator(-180.0), MaxValueValidator(180.0)],
+    )
+    boundary_geojson = models.JSONField(null=True, blank=True)
+    source_name = models.CharField(max_length=200, blank=True)
+    source_url = models.URLField(blank=True)
+    is_verified = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    last_updated = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["country", "name"], name="unique_state_name_per_country"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["country", "is_active"], name="state_country_active_idx")
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class District(models.Model):
+    """District reference data, optionally enriched from an official directory."""
+
+    state = models.ForeignKey(State, on_delete=models.PROTECT, related_name="districts")
+    code = models.CharField(max_length=60, unique=True)
+    lgd_code = models.CharField(max_length=20, null=True, blank=True)
+    name = models.CharField(max_length=150)
+    latitude = models.FloatField(
+        null=True, blank=True,
+        validators=[MinValueValidator(-90.0), MaxValueValidator(90.0)],
+    )
+    longitude = models.FloatField(
+        null=True, blank=True,
+        validators=[MinValueValidator(-180.0), MaxValueValidator(180.0)],
+    )
+    boundary_geojson = models.JSONField(null=True, blank=True)
+    source_name = models.CharField(max_length=200, blank=True)
+    source_url = models.URLField(blank=True)
+    is_verified = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+    last_updated = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["state", "name"], name="unique_district_name_per_state"
+            ),
+            models.UniqueConstraint(
+                fields=["state", "lgd_code"],
+                condition=models.Q(lgd_code__isnull=False),
+                name="unique_district_lgd_code_per_state",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["state", "is_active"], name="district_state_active_idx")
+        ]
+
+    def __str__(self):
+        return f"{self.name}, {self.state.name}"
 
 
 class Zone(models.Model):
@@ -28,17 +142,28 @@ class Zone(models.Model):
     ]
 
     # Identifiers
-    name = models.CharField(max_length=200, unique=True)
+    name = models.CharField(max_length=200)
     code = models.CharField(max_length=50, unique=True, help_text="Short zone code, e.g. CBE-001")
     description = models.TextField(blank=True)
 
     # Geography — centroid of zone (WGS84)
     latitude = models.FloatField(
+        null=True, blank=True,
         validators=[MinValueValidator(-90.0), MaxValueValidator(90.0)]
     )
     longitude = models.FloatField(
+        null=True, blank=True,
         validators=[MinValueValidator(-180.0), MaxValueValidator(180.0)]
     )
+    district = models.ForeignKey(
+        District,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="zones",
+    )
+    boundary_geojson = models.JSONField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
 
     # Physical characteristics
     area_km2 = models.FloatField(null=True, blank=True)
@@ -81,6 +206,9 @@ class Zone(models.Model):
 
     class Meta:
         ordering = ["code"]
+        indexes = [
+            models.Index(fields=["district", "code"], name="zone_district_code_idx")
+        ]
 
     def __str__(self):
         return f"{self.code} — {self.name}"

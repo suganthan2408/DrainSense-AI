@@ -16,38 +16,53 @@ const client = axios.create({
 
 // ---- Zones ----------------------------------------------------------------
 
-export const fetchZones = () => client.get("/zones/zones/").then((r) => r.data);
+export const fetchZones = (params = {}) =>
+  client.get("/zones/zones/", { params }).then((r) => r.data);
 
-export const fetchZone = (id) =>
-  client.get(`/zones/zones/${id}/`).then((r) => r.data);
+export const fetchZone = (id, params = {}) =>
+  client.get(`/zones/zones/${id}/`, { params }).then((r) => r.data);
 
 export const assessZone = (id) =>
   client.post(`/zones/zones/${id}/assess/`).then((r) => r.data);
 
 // ---- Assessments ----------------------------------------------------------
 
-export const fetchAssessments = (zoneId) => {
-  const params = zoneId ? { zone: zoneId } : {};
+export const fetchAssessments = (zoneId, geography = {}) => {
+  const params = { ...geography, ...(zoneId ? { zone: zoneId } : {}) };
   return client.get("/zones/assessments/", { params }).then((r) => r.data);
 };
+
+// ---- Geography ------------------------------------------------------------
+
+export const fetchCountries = () =>
+  client.get("/geography/countries/").then((r) => r.data);
+
+export const fetchStates = () =>
+  client.get("/geography/states/").then((r) => r.data);
+
+export const fetchDistricts = (state) =>
+  client.get("/geography/districts/", { params: state ? { state } : {} }).then((r) => r.data);
+
+export const fetchGeographicSummary = (params = {}) =>
+  client.get("/geography/summary/", { params }).then((r) => r.data);
 
 // ---- Observations ---------------------------------------------------------
 
 export const fetchDataSources = () =>
   client.get("/observations/sources/").then((r) => r.data);
 
-export const fetchRainfall = (zoneId) => {
-  const params = zoneId ? { zone: zoneId } : {};
+export const fetchRainfall = (zoneId, geography = {}) => {
+  const params = { ...geography, ...(zoneId ? { zone: zoneId } : {}) };
   return client.get("/observations/rainfall/", { params }).then((r) => r.data);
 };
 
-export const fetchForecasts = (zoneId) => {
-  const params = zoneId ? { zone: zoneId } : {};
+export const fetchForecasts = (zoneId, geography = {}) => {
+  const params = { ...geography, ...(zoneId ? { zone: zoneId } : {}) };
   return client.get("/observations/forecasts/", { params }).then((r) => r.data);
 };
 
-export const fetchForecastsLive = () =>
-  client.post("/observations/forecasts/fetch/").then((r) => r.data);
+export const fetchForecastsLive = (params = {}) =>
+  client.post("/observations/forecasts/fetch/", null, { params }).then((r) => r.data);
 
 // ---- Interventions --------------------------------------------------------
 
@@ -71,8 +86,8 @@ export const explainIntervention = (id) =>
 
 // ---- Outcomes -------------------------------------------------------------
 
-export const fetchOutcomes = (zoneId) => {
-  const params = zoneId ? { zone: zoneId } : {};
+export const fetchOutcomes = (zoneId, geography = {}) => {
+  const params = { ...geography, ...(zoneId ? { zone: zoneId } : {}) };
   return client.get("/outcomes/outcomes/", { params }).then((r) => r.data);
 };
 

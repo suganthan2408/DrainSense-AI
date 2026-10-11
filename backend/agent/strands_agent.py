@@ -20,7 +20,6 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 logger = logging.getLogger("drainsense")
 
@@ -31,7 +30,14 @@ try:
     STRANDS_AVAILABLE = True
 except ImportError:
     STRANDS_AVAILABLE = False
+    Agent = None
+    BedrockModel = None
     logger.warning("strands-agents SDK not available. Agent will use fallback mode.")
+
+try:
+    from strands.models.ollama import OllamaModel
+except ImportError:
+    OllamaModel = None
 
 
 SYSTEM_PROMPT = """You are DrainSense AI, an environmental decision-support assistant 
@@ -113,7 +119,11 @@ def _build_zone_context(intervention) -> dict:
     return context
 
 
-def _fallback_explanation(intervention, error_reason: str = "") -> dict:
+def _fallback_explanation(
+    intervention,
+    error_reason: str = "",
+    model_provider: str = "",
+) -> dict:
     """
     Deterministic fallback explanation when the agent is unavailable.
     Uses structured data from the database — no fabrication.
@@ -150,6 +160,8 @@ def _fallback_explanation(intervention, error_reason: str = "") -> dict:
         "human_verification_required": intervention.urgency in ("HIGH", "CRITICAL"),
         "confidence": assessment.confidence_level if assessment else "LOW",
         "agent_available": False,
+        "execution_status": "fallback",
+        "model_provider": model_provider or None,
         "fallback_reason": error_reason or "AWS Strands agent unavailable",
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -166,21 +178,59 @@ def explain_intervention(intervention) -> dict:
 
     Never exposes credentials. Never fabricates data.
     """
+    model_provider = os.environ.get("AGENT_MODEL_PROVIDER", "bedrock").strip().lower()
+
     # Check SDK availability
     if not STRANDS_AVAILABLE:
-        result = _fallback_explanation(intervention, "strands-agents SDK not installed")
+        result = _fallback_explanation(
+            intervention,
+            "strands-agents SDK not installed",
+            model_provider,
+        )
         _save_agent_result(intervention, result, error="SDK not available")
         return result
 
-    # Check AWS credentials present (don't validate — just check non-empty)
-    aws_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
-    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-    if not aws_key or not aws_secret:
+    if model_provider == "bedrock":
+        aws_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
+        aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+        if not aws_key or not aws_secret:
+            result = _fallback_explanation(
+                intervention,
+                "AWS credentials not configured for the Bedrock provider.",
+                model_provider,
+            )
+            _save_agent_result(intervention, result, error="No AWS credentials")
+            return result
+
+        model_id = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+        model_label = f"{model_id} via Amazon Bedrock (Strands SDK)"
+        model_factory = lambda: BedrockModel(
+            model_id=model_id,
+            region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+        )
+    elif model_provider == "ollama":
+        if OllamaModel is None:
+            result = _fallback_explanation(
+                intervention,
+                "Strands Ollama provider dependency is not installed.",
+                model_provider,
+            )
+            _save_agent_result(intervention, result, error="Ollama provider dependency unavailable")
+            return result
+
+        model_id = os.environ.get("OLLAMA_MODEL_ID", "llama3.2:3b")
+        model_label = f"{model_id} via local Ollama (Strands SDK)"
+        model_factory = lambda: OllamaModel(
+            host=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+            model_id=model_id,
+        )
+    else:
         result = _fallback_explanation(
             intervention,
-            "AWS credentials not configured. Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in .env"
+            "AGENT_MODEL_PROVIDER must be either 'bedrock' or 'ollama'.",
+            model_provider,
         )
-        _save_agent_result(intervention, result, error="No AWS credentials")
+        _save_agent_result(intervention, result, error="Unsupported model provider")
         return result
 
     # Build the structured prompt
@@ -192,10 +242,7 @@ def explain_intervention(intervention) -> dict:
     )
 
     try:
-        model = BedrockModel(
-            model_id="us.anthropic.claude-3-5-haiku-20241022-v1:0",
-            region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
-        )
+        model = model_factory()
         agent = Agent(
             model=model,
             system_prompt=SYSTEM_PROMPT,
@@ -210,16 +257,23 @@ def explain_intervention(intervention) -> dict:
         # Parse JSON from response
         result = _parse_agent_json(response_text)
         result["agent_available"] = True
+        result["execution_status"] = "success"
+        result["model_provider"] = model_provider
         result["generated_at"] = datetime.now(timezone.utc).isoformat()
-        result["model_used"] = "claude-3-5-haiku via AWS Bedrock (Strands SDK)"
+        result["model_used"] = model_label
 
         _save_agent_result(intervention, result)
         return result
 
     except Exception as exc:
-        logger.error("Strands agent call failed: %s", exc)
-        result = _fallback_explanation(intervention, str(exc))
-        _save_agent_result(intervention, result, error=str(exc))
+        logger.exception(
+            "Strands %s agent call failed for zone %s",
+            model_provider,
+            intervention.zone.code,
+        )
+        safe_reason = f"{model_provider} model request failed ({type(exc).__name__})."
+        result = _fallback_explanation(intervention, safe_reason, model_provider)
+        _save_agent_result(intervention, result, error=safe_reason)
         return result
 
 

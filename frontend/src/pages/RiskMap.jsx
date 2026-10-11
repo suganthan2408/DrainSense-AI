@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-le
 import { fetchZones, assessZone } from "../api";
 import RiskBadge from "../components/RiskBadge";
 import SyntheticDataBanner from "../components/SyntheticDataBanner";
+import { useLocationScope } from "../LocationContext";
 
 const RISK_COLORS = {
   LOW: "#22c55e",
@@ -16,9 +17,12 @@ const RISK_COLORS = {
 function FitBounds({ zones }) {
   const map = useMap();
   useEffect(() => {
-    if (zones.length > 0) {
-      const lats = zones.map((z) => z.latitude);
-      const lngs = zones.map((z) => z.longitude);
+    const mapped = zones.filter(
+      (zone) => Number.isFinite(zone.latitude) && Number.isFinite(zone.longitude),
+    );
+    if (mapped.length > 0) {
+      const lats = mapped.map((z) => z.latitude);
+      const lngs = mapped.map((z) => z.longitude);
       map.fitBounds([
         [Math.min(...lats) - 0.02, Math.min(...lngs) - 0.02],
         [Math.max(...lats) + 0.02, Math.max(...lngs) + 0.02],
@@ -35,20 +39,34 @@ export default function RiskMap() {
   const [assessing, setAssessing] = useState(false);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
+  const { locationParams, scopeLabel, zoneId } = useLocationScope();
 
   useEffect(() => {
     setLoading(true);
-    fetchZones()
-      .then((data) => setZones(data.results || data))
+    fetchZones(locationParams)
+      .then((data) => {
+        const rows = data.results || data;
+        setZones(rows);
+        setSelected((current) => (
+          rows.find((zone) => String(zone.id) === zoneId)
+          || rows.find((zone) => zone.id === current?.id)
+          || null
+        ));
+      })
       .catch(() => setError("Failed to load zones. Is the backend running?"))
       .finally(() => setLoading(false));
-  }, []);
+  }, [locationParams, zoneId]);
+
+  const mappedZones = zones.filter(
+    (zone) => Number.isFinite(zone.latitude) && Number.isFinite(zone.longitude),
+  );
 
   const handleAssess = async (zone) => {
     setAssessing(true);
+    setError(null);
     try {
       await assessZone(zone.id);
-      const fresh = await fetchZones();
+      const fresh = await fetchZones(locationParams);
       const freshZones = fresh.results || fresh;
       setZones(freshZones);
       setSelected(freshZones.find((z) => z.id === zone.id) || zone);
@@ -64,7 +82,7 @@ export default function RiskMap() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Risk Map</h1>
-          <p className="page-subtitle">Select a zone to view risk details and run an assessment</p>
+          <p className="page-subtitle">Scope: {scopeLabel}. Select a mapped zone to inspect its heuristic assessment.</p>
         </div>
       </div>
 
@@ -72,24 +90,28 @@ export default function RiskMap() {
 
       {error && <div className="alert alert-error">{error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: "1rem", height: "calc(100vh - 220px)", minHeight: "480px" }}>
+      <div className="risk-map-layout">
         {/* Map */}
-        <div style={{ borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--color-border)" }}>
+        <div className="risk-map-container">
           {loading ? (
             <div className="loading"><div className="spinner" /><span>Loading map…</span></div>
+          ) : mappedZones.length === 0 ? (
+            <div className="map-empty-state" role="status">
+              No zone coordinates are available for {scopeLabel}. No markers or district polygons are fabricated.
+            </div>
           ) : (
             <MapContainer
-              center={[11.0, 77.0]}
+              center={[mappedZones[0].latitude, mappedZones[0].longitude]}
               zoom={12}
               style={{ height: "100%", width: "100%" }}
-              aria-label="Coimbatore drainage zone risk map"
+              aria-label={`${scopeLabel} drainage zone risk map`}
             >
               <TileLayer
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
               />
               <FitBounds zones={zones} />
-              {zones.map((z) => {
+              {mappedZones.map((z) => {
                 const cat = z.latest_risk_category || "UNKNOWN";
                 const color = RISK_COLORS[cat] || RISK_COLORS.UNKNOWN;
                 const radius = cat === "CRITICAL" ? 18 : cat === "HIGH" ? 15 : cat === "MODERATE" ? 12 : 9;
@@ -110,6 +132,9 @@ export default function RiskMap() {
                     <Tooltip>
                       <strong>{z.name}</strong><br />
                       {z.code} · {cat} risk · Score: {z.latest_risk_score ?? "not assessed"}
+                      <br />{z.district_name || "District unavailable"}{z.state_name ? `, ${z.state_name}` : ""}
+                      {z.is_synthetic && <><br />Synthetic demonstration location</>}
+                      {z.latest_assessed_at && <><br />Assessed: {new Date(z.latest_assessed_at).toLocaleString()}</>}
                     </Tooltip>
                   </CircleMarker>
                 );
@@ -125,6 +150,7 @@ export default function RiskMap() {
             <h3 style={{ marginBottom: "0.5rem" }}>Risk Legend</h3>
             <p className="text-sm text-muted" style={{ marginBottom: "0.5rem" }}>
               Circle size and colour indicate risk category. Score is 0–100 (heuristic, not probability).
+              Existing demonstration-zone coordinates are synthetic; district boundaries are not loaded.
             </p>
             {Object.entries(RISK_COLORS).filter(([k]) => k !== "UNKNOWN").map(([cat, color]) => (
               <div key={cat} style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
@@ -181,13 +207,13 @@ export default function RiskMap() {
 
               <table style={{ marginBottom: "0.75rem" }} aria-label="Zone attributes">
                 <tbody>
-                  {selected.avg_elevation_m && (
+                  {selected.avg_elevation_m != null && (
                     <tr><td className="text-muted text-sm" style={{ padding: "3px 8px 3px 0" }}>Elevation</td><td>{selected.avg_elevation_m} m</td></tr>
                   )}
-                  {selected.drainage_density && (
+                  {selected.drainage_density != null && (
                     <tr><td className="text-muted text-sm" style={{ padding: "3px 8px 3px 0" }}>Drain density</td><td>{selected.drainage_density} km/km²</td></tr>
                   )}
-                  {selected.imperviousness_pct && (
+                  {selected.imperviousness_pct != null && (
                     <tr><td className="text-muted text-sm" style={{ padding: "3px 8px 3px 0" }}>Impervious</td><td>{selected.imperviousness_pct}%</td></tr>
                   )}
                   <tr><td className="text-muted text-sm" style={{ padding: "3px 8px 3px 0" }}>Flood history</td><td>{selected.historical_flood_count} events</td></tr>

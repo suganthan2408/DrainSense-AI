@@ -13,6 +13,7 @@ urlpatterns = [
 
     # API v1
     path("api/v1/zones/", include("zones.urls")),
+    path("api/v1/geography/", include("zones.geography_urls")),
     path("api/v1/observations/", include("observations.urls")),
     path("api/v1/interventions/", include("interventions.urls")),
     path("api/v1/outcomes/", include("outcomes.urls")),

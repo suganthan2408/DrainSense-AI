@@ -6,22 +6,35 @@ Environment-based configuration via .env / environment variables.
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+import sys
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = str(BASE_DIR.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 load_dotenv(BASE_DIR.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
+DEBUG = os.environ.get("DJANGO_DEBUG", "True") == "True"
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "insecure-dev-key-change-before-deploy"
 )
-DEBUG = os.environ.get("DJANGO_DEBUG", "True") == "True"
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+if not DEBUG and (
+    not SECRET_KEY or SECRET_KEY == "insecure-dev-key-change-before-deploy"
+):
+    raise ImproperlyConfigured(
+        "Set DJANGO_SECRET_KEY to a secure value when DJANGO_DEBUG=False."
+    )
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",") if h.strip()]
 
 # ---------------------------------------------------------------------------
 # Application definition
@@ -166,7 +179,7 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "DrainSense AI API",
     "DESCRIPTION": (
         "Urban waterlogging risk and drainage intervention prioritisation platform "
-        "for Coimbatore, Tamil Nadu."
+        "for India. Geographic coverage depends on imported verified reference data."
     ),
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,

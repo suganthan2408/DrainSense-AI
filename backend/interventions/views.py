@@ -5,6 +5,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
+from zones.geography import apply_geographic_filters, filter_by_zone_id
 
 from .models import InterventionRecommendation, InterventionLog
 from .serializers import (
@@ -32,13 +33,16 @@ class InterventionRecommendationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = InterventionRecommendationSerializer
 
     def get_queryset(self):
-        qs = InterventionRecommendation.objects.select_related("zone", "risk_assessment").prefetch_related("logs")
+        qs =         InterventionRecommendation.objects.select_related(
+            "zone", "zone__district", "zone__district__state", "risk_assessment"
+        ).prefetch_related("logs")
+        qs = apply_geographic_filters(qs, self.request.query_params, "zone__")
         status_filter = self.request.query_params.get("status")
         zone_id = self.request.query_params.get("zone")
         if status_filter:
             qs = qs.filter(status=status_filter)
         if zone_id:
-            qs = qs.filter(zone_id=zone_id)
+            qs = filter_by_zone_id(qs, zone_id, "zone_id")
         return qs.order_by("priority_rank")
 
     @extend_schema(

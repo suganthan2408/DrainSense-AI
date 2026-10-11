@@ -5,6 +5,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
+from zones.geography import apply_geographic_filters, filter_by_zone_id
 
 from .models import WaterloggingOutcome, ModelEvaluation
 from .serializers import (
@@ -19,7 +20,9 @@ logger = logging.getLogger("drainsense")
 class WaterloggingOutcomeViewSet(viewsets.ModelViewSet):
     """Record and retrieve observed waterlogging outcomes."""
 
-    queryset = WaterloggingOutcome.objects.select_related("zone", "risk_assessment").all()
+    queryset = WaterloggingOutcome.objects.select_related(
+        "zone", "zone__district", "zone__district__state", "risk_assessment"
+    ).all()
 
     def get_serializer_class(self):
         if self.action in ("create", "update", "partial_update"):
@@ -28,10 +31,11 @@ class WaterloggingOutcomeViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = apply_geographic_filters(qs, self.request.query_params, "zone__")
         zone_id = self.request.query_params.get("zone")
         outcome = self.request.query_params.get("outcome")
         if zone_id:
-            qs = qs.filter(zone_id=zone_id)
+            qs = filter_by_zone_id(qs, zone_id, "zone_id")
         if outcome:
             qs = qs.filter(outcome=outcome)
         return qs
